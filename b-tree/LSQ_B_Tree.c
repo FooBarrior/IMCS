@@ -18,7 +18,7 @@
 //that is, in turn, defining tree's upper and lower node bounds;
 //though it's naming differs from other constants,
 //this exception is included into the internal naming convention
-#define t 2
+#define t 200
 
 //B-tree nodes consists of:
 //at least 1 and at most (2 * t - 1) keys in root
