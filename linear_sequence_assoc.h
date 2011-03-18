@@ -73,3 +73,4 @@ extern void LSQ_DeleteRearElement(LSQ_HandleT handle);
 extern void LSQ_DeleteElement(LSQ_HandleT handle, LSQ_IntegerIndexT key);
 
 #endif
+

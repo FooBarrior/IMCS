@@ -1,364 +1,615 @@
-#include <stdbool.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include "linear_sequence_assoc.h"
 
-/*TODO implement subtree key counters*/
 
-#define t 2
-//B-tree nodes consisNts of:
+//MSVC port
+#if __STDC_VERSION__ >= 199901L || __GNUC__ >= 3
+#include <stdbool.h>
+#else
+#define bool int
+#define true 1
+#define false 0
+#define inline __inline
+#endif
+
+//this identificator t is used by Cormen to define the relative value,
+//that is, in turn, defining tree's upper and lower node bounds;
+//though it's naming differs from other constants,
+//this exception is included into the internal naming convention
+#define t 200
+
+//B-tree nodes consists of:
 //at least 1 and at most (2 * t - 1) keys in root
 //at least (t - 1) and at most (2 * t - 1) keys in other nodes
 #define MIN_KEY_COUNT (t - 1)
 #define MAX_KEY_COUNT (2 * t - 1)
+
 //MAX_CHILD_COUNT MUST BE always (MAX_KEY_COUNT + 1)
 #define MAX_CHILD_COUNT (MAX_KEY_COUNT + 1)
+//MIN_CHILD_COUNT MUST BE always (MIN_KEY_COUNT + 1)
+#define MIN_CHILD_COUNT (MIN_KEY_COUNT + 1)
+
+//*_CHILD_COUNT constants are defined for non-leaf nodes
+//MIN_*_COUNT constants are defined for non-root nodes
+
 
 typedef struct {
     LSQ_IntegerIndexT key;
     LSQ_BaseTypeT data;
-} TreeItem, *TreeItemRef;
+} TreeItem, *TreeItemPtr;
 
 typedef struct TreeNode{
     //the number of children is always 0 in leaves, and (keyCount + 1) otherwise
+    //this could be controllen by function isTreeConditionFulfilled
     size_t keyCount, childCount;
-    TreeItemRef items[MAX_KEY_COUNT];
-    
-    //if there are n items in node, then there are (n + 1) children there;
-    //thinking parent could be useful
+    TreeItemPtr items[MAX_KEY_COUNT];
+
+    //parent could be useful for some good job
     struct TreeNode **nodes, *parent;
-    
+
     //subtreeKeyCount is helpful to iterative operations
     //to leave disk data flow possible, we store here counts for each child node
     size_t *subtreeKeyCount;
-    
-    //i am also ensured that it will be always leaf, if it is sptlitted from leaf, or it is initial node
-} TreeNode, *TreeNodeRef;
+
+    //i am also ensured, that it will be always leaf,
+    //if it is sptlitted from leaf, or it is initial node
+} TreeNode, *TreeNodePtr;
 
 typedef struct {
     LSQ_IntegerIndexT size;
-    TreeNodeRef root;
-    int height;
-    //seems to be optional, but would be declared, AH FUCK ILL DELETE IT >[} *TODO*
-    TreeNodeRef first, last;
-} Tree, *TreeRef;
+    TreeNodePtr root;
+    size_t height;
+} Tree, *TreePtr;
 
-//key position structure for key-searching functions
+typedef enum {
+    IT_NORMAL,
+    IT_BEFORE_FIRST,
+    IT_PAST_REAR,
+    IT_BAD,
+} TreeIteratorState;
+
+//key position structure for key-searching functions and iterators
 typedef struct {
-    TreeNodeRef node;
+    TreeNodePtr node;
     int pos;
-} KeyPos, *KeyPosRef;
+} KeyPos, *KeyPosPtr;
+
+typedef struct {
+    TreePtr tree;
+    TreeNodePtr node;
+    int pos;
+    TreeIteratorState state;
+} TreeIterator, *TreeIteratorPtr;
+
+//enumerable for determining of how does fallDown() falls down
+typedef enum {
+    FD_UNDETERMINED,
+    FD_BY_LEFT_SIDE,
+    FD_BY_RIGHT_SIDE,
+} FallDownBehave;
+
+
+
+//determine if node is valid b-tree node
+static inline bool isTreeConditionFulfilled(TreeNodePtr node);
+static inline bool isTreeNodeChildCountValid(TreeNodePtr node);
 
 //structure-initializing functions
-static TreeNodeRef newTreeNodeRef(int keyCount, TreeNodeRef parent, bool isLeaf);
-static KeyPosRef newKeyPos(TreeNodeRef node, int pos);
-
-#define UNDEF_KEY_POS (newKeyPos(NULL, 0))
+static TreeNodePtr newTreeNode(size_t keyCount, TreeNodePtr parent, bool leaf);
+static KeyPosPtr newKeyPos(TreeNodePtr node, int pos);
+static TreeIteratorPtr newTreeIterator(TreePtr tree, TreeNodePtr node, int pos, TreeIteratorState state);
 
 //key searching functions
-static int getItemOrNext(TreeNodeRef node, LSQ_IntegerIndexT key);
-static KeyPosRef SearchKey(TreeNodeRef node, LSQ_IntegerIndexT key);
+static TreeItemPtr fallDown(TreeNodePtr node, FallDownBehave how);
+static int getItemOrNext(TreeNodePtr node, LSQ_IntegerIndexT key);
+static inline bool isKeyFound(TreeNodePtr node, int pos, LSQ_IntegerIndexT key);
+static KeyPosPtr SearchKey(TreeNodePtr node, LSQ_IntegerIndexT key);
 
-//determine whether the node is leaf or not
-static int isLeaf(TreeNodeRef node);
+/******************************************************************************/
+//in following function block functions are heuristically determining
+//some parameters from existing node data
+//their implementation is not strictly defined and could change from build to build
+
+//determine whether the node is leaf/root or not
+static inline bool isLeaf(TreeNodePtr node);
+static inline bool isRoot(TreeNodePtr node);
+
+/******************************************************************************/
+
+//compute total number of keys under the node
+static size_t subforestKeyCount(TreeNodePtr node);
 
 //functions, inserting/deleting key directly from node
-static void addKey(TreeNodeRef node, int pos, TreeItemRef x);
-static void addNode(TreeNodeRef node, TreeNodeRef newNode, int pos);
-static void excludeKey(TreeNodeRef node, int pos, bool needFree);
-static void excludeNode(TreeNodeRef node, int pos, bool needFree);
+static void addKey(TreeNodePtr node, int pos, TreeItemPtr x);
+static void addNode(TreeNodePtr node, TreeNodePtr newNode, int subtreeKeyCount, int pos);
+static void excludeKey(TreeNodePtr node, int pos, bool needFree);
+static void excludeNode(TreeNodePtr node, int pos, bool needFree);
 
 //main key insertion algorithm block
-static void pourElements(TreeNodeRef a, TreeNodeRef b, int start);
-static bool splitChild(TreeNodeRef node, int x);
-static bool insertKey(TreeNodeRef node, TreeItemRef key);
-static bool insertKeyInTree(TreeRef tree, TreeItemRef item);
+static void pourElements(TreeNodePtr a, TreeNodePtr b, int start);
+static bool splitChild(TreeNodePtr node, int x);
+static bool insertKey(TreeNodePtr node, TreeItemPtr key);
+static bool insertKeyInTree(TreePtr tree, TreeItemPtr item);
 
 //main deletion algorithm block
-static void mergeToLeft(TreeNodeRef parent, int lPos);
-static bool deleteKey(TreeNodeRef node, LSQ_IntegerIndexT key, int pos, bool needFree);
-static bool deleteKeyFromTree(TreeRef tree, LSQ_IntegerIndexT key);
+static void mergeToLeft(TreeNodePtr parent, int lPos);
+static int balanceNode(TreeNodePtr node, int pos);
+static bool internalKeyDelete(TreeNodePtr node, int pos, int shift, FallDownBehave fb);
+static bool deleteKey(TreeNodePtr node, LSQ_IntegerIndexT key, int pos, bool needFree);
+static bool deleteKeyFromTree(TreePtr tree, LSQ_IntegerIndexT key);
+static inline void fallDownDelete(TreePtr tree, FallDownBehave fb);
 
-TreeNodeRef newTreeNodeRef(int keyCount, TreeNodeRef parent, bool isLeaf){
+//initialize given iterator to given values
+static inline void setIterator(TreeIteratorPtr it, TreeNodePtr node, int pos, TreeIteratorState state);
+
+#ifdef LSQ_DEBUG
+#define INLINE_ON_RELEASE
+#else
+#define INLINE_ON_RELEASE inline
+#endif
+//tree debug info output
+static INLINE_ON_RELEASE void dumpNode(TreeNodePtr node);
+static INLINE_ON_RELEASE void dump(TreeNodePtr node);
+
+
+/******************************************************************************/
+
+//not sure if it'll be ever used
+bool isTreeConditionFulfilled(TreeNodePtr node){
+    return
+        NULL == node || //huh, never mind
+        (isRoot(node) || node->keyCount >= MIN_KEY_COUNT) &&
+        node->keyCount <= MAX_KEY_COUNT &&
+        isTreeNodeChildCountValid(node)
+    ;
+}
+
+bool isTreeNodeChildCountValid(TreeNodePtr node){
+    return
+        NULL == node ||
+        (isRoot(node) || node->childCount >= MIN_CHILD_COUNT) &&
+            node->childCount <= MAX_CHILD_COUNT
+        || isLeaf(node) && 0 == node->childCount;
+}
+
+TreeNodePtr newTreeNode(size_t keyCount, TreeNodePtr parent, bool leaf){
     int i = 0;
-    TreeNodeRef res = malloc(sizeof(TreeNode));
+    TreeNodePtr res = malloc(sizeof(TreeNode));
     if(NULL == res) return NULL;
-    
-    if(!isLeaf){
+    size_t childCount = 0;
 
-        res->children = malloc(sizeof(TreeNode)*MAX_CHILD_COUNT);
-        res->subtreeKeyCount = malloc(sizeof(size_t)*MAX_CHILD_COUNT);
-        if(NULL == res->children || NULL == res->subtreeKeyCount){
-            free(res->children);
+    if(!leaf){
+        childCount = keyCount + 1;
+        res->nodes = malloc(sizeof(TreeNodePtr) * MAX_CHILD_COUNT);
+        res->subtreeKeyCount = malloc(sizeof(size_t) * MAX_CHILD_COUNT);
+        if(NULL == res->nodes || NULL == res->subtreeKeyCount){
+            free(res->nodes);
             free(res->subtreeKeyCount);
             free(res);
             return NULL;
         }
-        
-    } else
-        res->children = res->subtreeKeyCount = NULL;
 
-    res->keyCount = keyCount;
-    res->childCount = isLeaf ? 0 : keyCount + 1;
-    res->parent = parent;
-    
-    for(i = res->childCount; i < MAX_CHILD_COUNT; i++){
-        res->subtreeKeyCount 0;
-        res->nodes[i] = NULL;
+        for(i = childCount; i < MAX_CHILD_COUNT; i++){
+            res->subtreeKeyCount[i] = 0;
+            res->nodes[i] = NULL;
+        }
+
+    } else{
+        res->nodes = NULL;
+        res->subtreeKeyCount = NULL;
     }
+
+    for(i = keyCount; i < MAX_KEY_COUNT; i++) res->items[i] = NULL;
+    
+    res->keyCount = keyCount;
+    res->childCount = childCount;
+    res->parent = parent;
+
     return res;
 }
 
-KeyPosRef newKeyPos(TreeNodeRef node, int pos){
-    KeyPosRef res = malloc(sizeof(KeyPos));
+KeyPosPtr newKeyPos(TreeNodePtr node, int pos){
+    KeyPosPtr res = malloc(sizeof(KeyPos));
     if(NULL == res) return NULL;
     res->node = node;
     res->pos = pos;
     return res;
 }
 
-int getItemOrNext(TreeNodeRef node, LSQ_IntegerIndexT key){
+TreeItemPtr fallDown(TreeNodePtr node, FallDownBehave how){
+    if(how != FD_BY_RIGHT_SIDE && how != FD_BY_LEFT_SIDE) return NULL;
+    if(NULL == node) return NULL;
+    while(!isLeaf(node)){
+        assert(node != NULL && node->nodes != NULL);
+        node = node->nodes[how == FD_BY_RIGHT_SIDE ? node->childCount - 1 : 0];
+    }
+    return node->items[how == FD_BY_RIGHT_SIDE ? node->keyCount - 1 : 0];
+}
+
+int getItemOrNext(TreeNodePtr node, LSQ_IntegerIndexT key){
     int pos = 0;
     assert(node != NULL);
     for(pos = 0; pos < node->keyCount && node->items[pos]->key < key; pos++);
     return pos;
 }
 
-KeyPosRef SearchKey(TreeNodeRef node, LSQ_IntegerIndexT key){
-    if(NULL == node) return UNDEF_KEY_POS;
+bool isKeyFound(TreeNodePtr node, int pos, LSQ_IntegerIndexT key){
+    assert(node->keyCount >= pos);
+    return pos < node->keyCount && node->items[pos]->key == key;
+}
+
+KeyPosPtr SearchKey(TreeNodePtr node, LSQ_IntegerIndexT key){
+    if(NULL == node) return NULL;
     int found = 0;
-    
+
     while(!found){
         int pos = getItemOrNext(node, key);
-        if(pos < 0) return UNDEF_KEY_POS;
+        if(pos < 0) return NULL;
         assert(node->items[pos] != NULL);
         if(pos < node->keyCount && node->items[pos]->key == key)
-            return newKeyPos(node, key);
+            return newKeyPos(node, pos);
         found = found || isLeaf(node);
         if(!found) node = node->nodes[pos];
     }
+    return NULL;
 }
 
-int isLeaf(TreeNodeRef node){
-//me don't allocate memory for .nodes if it's leaf
+bool isLeaf(TreeNodePtr node){
+    //memory isn't allocating for .nodes if it's leaf
     return node != NULL && NULL == node->nodes;
 }
 
-void addKey(TreeNodeRef node, int pos, TreeItemRef x){
+bool isRoot(TreeNodePtr node){
+    //node's parent is NULL <=> node is root
+    return NULL == node->parent;
+}
+
+size_t subforestKeyCount(TreeNodePtr node){
+    size_t res = 0, i = 0;
+    if(!isLeaf(node))
+        for(i = 0; i < node->childCount; i++) res += node->subtreeKeyCount[i];
+    return res + node->keyCount;
+}
+
+void addKey(TreeNodePtr node, int pos, TreeItemPtr x){
     assert(node != NULL && pos >= 0 && pos <= node->keyCount && node->items != NULL);
     assert(node->keyCount < MAX_KEY_COUNT);
     memmove(
         node->items + pos + 1,
         node->items + pos,
-        sizeof(TreeNodeRef) * (node->keyCount - pos)
+        sizeof(TreeNodePtr) * (node->keyCount - pos)
     );
     node->items[pos] = x;
     node->keyCount++;
 }
 
-void addNode(TreeNodeRef node, TreeNodeRef newNode, int pos){
+void addNode(TreeNodePtr node, TreeNodePtr newNode, int subtreeKeyCount, int pos){
+    assert(isTreeNodeChildCountValid(node));
+    if(isLeaf(node)) return;
+    
     assert(node != NULL && pos >= 0 && pos <= node->childCount && node->items != NULL);
     assert(node->childCount < MAX_CHILD_COUNT);
     memmove(
         node->nodes + pos + 1,
         node->nodes + pos,
-        sizeof(TreeNodeRef) * (node->childCount - pos)
+        sizeof(TreeNodePtr) * (node->childCount - pos)
     );
+    memmove(
+        node->subtreeKeyCount + pos + 1,
+        node->subtreeKeyCount + pos,
+        sizeof(size_t) * (node->childCount - pos)
+    );
+
+    newNode->parent = node;
     node->nodes[pos] = newNode;
+    node->subtreeKeyCount[pos] = subtreeKeyCount;
     node->childCount++;
 }
 
-void excludeKey(TreeNodeRef node, int pos, int needFree){
+void excludeKey(TreeNodePtr node, int pos, bool needFree){
     assert(node != NULL && pos >= 0 && pos < node->keyCount && node->items != NULL);
     //assert(node->keyCount > MIN_KEY_COUNT); root???
     if(needFree) free(node->items[pos]);
     memmove(
         node->items + pos,
         node->items + pos + 1,
-        sizeof(TreeNodeRef) * (node->keyCount - pos - 1)
+        sizeof(TreeNodePtr) * (node->keyCount - pos - 1)
     );
     node->items[--node->keyCount] = NULL;
 }
 
-void excludeNode(TreeNodeRef node, int pos, int needFree){
+void excludeNode(TreeNodePtr node, int pos, bool needFree){
+    if(isLeaf(node)) return;
+    
+//    assert(isTreeNodeChildCountValid(node)); //why not?
     assert(node != NULL && pos >= 0 && pos < node->childCount && node->nodes != NULL);
-    assert(node->childCount > t);
     if(needFree) free(node->nodes[pos]);
     memmove(
         node->nodes + pos,
         node->nodes + pos + 1,
-        sizeof(TreeNodeRef) * (node->childCount - pos - 1)
+        sizeof(TreeNodePtr) * (node->childCount - pos - 1)
     );
-    node->nodes[--node->childCount] = NULL;
+    memmove(
+        node->subtreeKeyCount + pos,
+        node->subtreeKeyCount + pos + 1,
+        sizeof(size_t) * (node->childCount - pos - 1)
+    );
+    
+    node->childCount--;
+    node->nodes[node->childCount] = NULL;
+    node->subtreeKeyCount[node->childCount] = 0;
 }
 
-void pourElements(TreeNodeRef a, TreeNodeRef b, int start){
-    assert(a->keyCount + b->keyCount - start <= MAX_KEY_COUNT && a->childCount == a->keyCount + 1);
-    memcpy(a->items + a->keyCount, b->items + start, (start + 1) * sizeof(TreeItemRef));
-    
-    if(!isLeaf(a))
-        memcpy(a->nodes + a->childCount, b->nodes + start + 1, (start + 1) * sizeof(TreeNodeRef));
-    
+//a=>dest, b=>src, pour from start to end of b
+//for children there is one more to drag, comparing with items
+void pourElements(TreeNodePtr a, TreeNodePtr b, int start){
+    size_t count = b->keyCount - start;
     int i = 0;
-    for(i = start; i < b->keyCount; i++) b->items[i] = NULL, b->nodes[i + 1] = NULL;
+    assert(a->keyCount + count <= MAX_KEY_COUNT);
+    //assert(isTreeConditionFulfilled(a)); /*unreliable*/
+    //assert(isTreeNodeChildCountValid(a));/*unreliable too*/
 
-    a->childCount = (a->keyCount += b->keyCount - start);
-    b->childCount = (b->keyCount = start) + 1;
+    memcpy(a->items + a->keyCount, b->items + start, count * sizeof(TreeItemPtr));
+    a->keyCount += count;
+
+    for(i = start; i < b->keyCount; i++) b->items[i] = NULL;
+    b->keyCount = start - 1;
+
+    if(isLeaf(a)) return;
+
+    count++;
+    for(i = start; i < b->childCount; i++) b->nodes[i]->parent = a;
+    memcpy(a->nodes + a->childCount, b->nodes + start, count * sizeof(TreeNodePtr));
+    memcpy(a->subtreeKeyCount + a->childCount, b->subtreeKeyCount + start, count * sizeof(size_t));
+    for(i = start; i < b->childCount; i++){
+        b->nodes[i] = NULL;
+        b->subtreeKeyCount[i] = 0;
+    }
+    
+    a->childCount += count;
+    b->childCount = start;
 }
 
-bool splitChild(TreeNodeRef node, int x){
+bool splitChild(TreeNodePtr node, int x){
     assert(node != NULL && MAX_KEY_COUNT != node->keyCount);
     assert(x >= 0 && x <= node->keyCount && node->keyCount >= 0);
-    TreeNodeRef child = node->nodes[x], newNode = newTreeNodeRef(0, node);
-    if(NULL == newNode) return false;
+
+    TreeNodePtr child = node->nodes[x];
     assert(child != NULL);
-    pourElements(newNode, child, MIN_KEY_COUNT);
-    //insert middle child's key in node
-    addKey(node, x, child->items[t]); // это мне не нра
-    addNode(node, newNode, x + 1);
+
+    TreeNodePtr newNode = newTreeNode(0, node, isLeaf(child));
+    if(NULL == newNode) return false;
+    newNode->childCount = 0;
+
+    pourElements(newNode, child, t);
+    //insert mediane key in node
+    addKey(node, x, child->items[t - 1]);
+    child->items[t - 1] = NULL;
+    addNode(node, newNode, subforestKeyCount(newNode), x + 1);
+    node->subtreeKeyCount[x] -= node->subtreeKeyCount[x + 1] + 1;
+
     return true;
 }
 
-bool insertKey(TreeNodeRef node, TreeItemRef key){
+bool insertKey(TreeNodePtr node, TreeItemPtr key){
     assert(node != NULL && key != NULL);
     int pos = getItemOrNext(node, key->key);
+    bool keyFound = isKeyFound(node, pos, key->key);
+    if(keyFound){
+        node->items[pos]->data = key->data;
+        return false;
+    }
+    
     if(isLeaf(node)){
         addKey(node, pos, key);
         return true;
     }
-    
+
     if(node->nodes[pos]->keyCount == MAX_KEY_COUNT){
         if(!splitChild(node, pos)) return false;
         //after we splitted, a chance, that a key
         //added in node is less then a new key, is apperaring
+        assert(node->items[pos] != NULL);
         if(node->items[pos]->key < key->key) pos++;
-        assert(node->items[pos]->key < key->key);
+        assert(pos == node->keyCount || node->items[pos]->key > key->key);
     }
-    return insertKey(node->nodes[pos], key);
+    bool res = insertKey(node->nodes[pos], key);
+    if(res) node->subtreeKeyCount[pos]++;
+    return res;
 }
 
-bool insertKeyInTree(TreeRef tree, TreeItemRef item){
+bool insertKeyInTree(TreePtr tree, TreeItemPtr item){
     if(NULL == tree) return false;
+
     assert(tree->root != NULL && item != NULL);
-//    tree->size++;
-    if(MAX_KEY_COUNT != tree->root->keyCount) return insertKey(tree->root, item); // may be assert?
-    TreeNodeRef newRoot = newTreeNodeRef(0, NULL), oldRoot = tree->root;
+
+    if(MAX_KEY_COUNT != tree->root->keyCount)
+        return insertKey(tree->root, item);
+
+    TreeNodePtr newRoot = newTreeNode(0, NULL, false), oldRoot = tree->root;
+
+    //newTreeNode also sets childCount to 1, so the following line fixes it
+    newRoot->childCount = 0;
+
     oldRoot->parent = newRoot;
     tree->root = newRoot;
+    addNode(newRoot, oldRoot, subforestKeyCount(oldRoot), 0);
     splitChild(newRoot, 0);
     return insertKey(tree->root, item);
 }
 
 //each of x and y has less then t keys and keys of y migrate to x, splitten by mediane
-void mergeToLeft(TreeNodeRef parent, int lPos){
+//it is, of course, used both on left and right merging
+void mergeToLeft(TreeNodePtr parent, int lPos){
     assert(parent != NULL);
+    if(isLeaf(parent)) return;
     assert(lPos >= 0 && lPos < parent->keyCount && parent->keyCount <= MAX_KEY_COUNT);
-    TreeNodeRef x = parent->nodes[lPos], y = parent->nodes[lPos + 1];
+    TreeNodePtr x = parent->nodes[lPos], y = parent->nodes[lPos + 1];
     assert(x->keyCount < t && y->keyCount < t);
+
     x->items[x->keyCount++] = parent->items[lPos];
-    x->nodes[x->childCount++] = y->nodes[0];
+
     pourElements(x, y, 0);
-    excludeKey(parent, lPos, 0);
-    excludeNode(parent, lPos + 1, 1);
+
+    excludeKey(parent, lPos, false);
+
+
+    parent->subtreeKeyCount[lPos] += parent->subtreeKeyCount[lPos + 1] + 1;
+    excludeNode(parent, lPos + 1, true); //and free it, yep
 }
 
-bool deleteKey(TreeNodeRef node, LSQ_IntegerIndexT key, int pos, int needFree){
-//Kormen, 2a-2b
-    bool res = false;
-    if(NULL == node) return false;
-    
-    bool internalDelete(TreeNodeRef child, int childKeyPos){
-        if(child->keyCount < t) return false;
-        if(needFree) free(node->items[pos]);
-        node->items[pos] = child->items[childKeyPos];
-        res = deleteKey(child, child->items[childKeyPos]->key, childKeyPos, 0);
-        return true;
+//do pivot when we haven't found objective key yet
+int balanceNode(TreeNodePtr node, int pos){
+    if(node->nodes[pos]->keyCount != MIN_KEY_COUNT) return pos;
+
+    assert(node->nodes != NULL);
+    TreeNodePtr mc = node->nodes[pos];
+
+    TreeNodePtr lc = pos > 0 ? node->nodes[pos - 1] : NULL;
+
+    TreeNodePtr rc = pos + 1 < node->childCount ? node->nodes[pos + 1] : NULL;
+
+    int lkp = pos - 1, rkp = pos;
+    assert(lc != NULL || rc != NULL);
+    assert(isTreeConditionFulfilled(lc) && isTreeConditionFulfilled(rc));
+
+    if(lc != NULL && lc->keyCount > MIN_KEY_COUNT){
+
+        int lastKey = lc->keyCount - 1;
+        addKey(mc, 0, node->items[lkp]);
+        node->items[lkp] = lc->items[lastKey];
+
+        excludeKey(lc, lastKey, false);
+        node->subtreeKeyCount[pos - 1]--;
+        node->subtreeKeyCount[pos]++;
+
+        if(!isLeaf(lc)){
+            int lastNode = lc->childCount - 1;
+            size_t kc = lc->subtreeKeyCount[lastNode];
+            node->subtreeKeyCount[pos - 1] -= kc;
+            node->subtreeKeyCount[pos] += kc;
+
+            addNode(mc, lc->nodes[lastNode], kc, 0);
+            excludeNode(lc, lastNode, false);
+        }
+        
+        return pos;
     }
+
+    if(rc != NULL && rc->keyCount > MIN_KEY_COUNT){
+
+        addKey(mc, mc->keyCount, node->items[rkp]);
+        node->items[rkp] = rc->items[0];
+
+        excludeKey(rc, 0, false);
+        node->subtreeKeyCount[pos + 1]--;
+        node->subtreeKeyCount[pos]++;
+
+        if(!isLeaf(rc)){
+            size_t kc = rc->subtreeKeyCount[0];
+            node->subtreeKeyCount[pos + 1] -= kc;
+            node->subtreeKeyCount[pos] += kc;
+
+            addNode(mc, rc->nodes[0], kc, mc->childCount);
+            excludeNode(rc, 0, false);
+        }
+
+        return pos;
+    }
+
+    if(lc != NULL){
+        mergeToLeft(node, lkp);
+        //this is the specific rule, because node is poured to left
+        pos--;
+    }
+    else if(rc != NULL) mergeToLeft(node, rkp);
+    else assert(false);
+    
+    return pos;
+}
+
+//Cormen: 2a-2b
+bool internalKeyDelete(TreeNodePtr node, int pos, int shift, FallDownBehave fb){
+    int childNodePos = pos + shift;
+    TreeNodePtr child = node->nodes[childNodePos];
+    if(childNodePos >= node->childCount || child->keyCount < t) return false;
+
+    free(node->items[pos]);
+    node->items[pos] = fallDown(child, fb);
+    
+    LSQ_IntegerIndexT key = node->items[pos]->key;
+    assert(deleteKey(child, key, getItemOrNext(child, key), false));
+    node->subtreeKeyCount[childNodePos]--;
+
+    return true;
+}
+
+bool deleteKey(TreeNodePtr node, LSQ_IntegerIndexT key, int pos, bool needFree){
+//ALWAYS, on successful (with true on return) call of this function, we need to
+//decrease .subtreeKeyCount; how to do it pretty? Suppose, i'll wrap it in *TODO*, or just leave;
+    bool res = true;
+    if(NULL == node) return false;
+
 //1
     if(isLeaf(node)){
-        if(node->items[pos]->key != key) return false;
-        excludeKey(node, pos, true);//!!!
+        if(!isKeyFound(node, pos, key)) return false;
+        excludeKey(node, pos, needFree);
         return true;
     }
 //2
 //if key found in internal node
-    if(node->items[pos]->key == key){
+    if(isKeyFound(node, pos, key)){
         //we always have left and right children of key splitter
-        assert(node->nodes[pos] != NULL);
-        if(internalDelete(node->nodes[pos], node->nodes[pos]->keyCount - 1)) return res;
-        assert(node->nodes[pos + 1] != NULL);
-        if(internalDelete(node->nodes[pos + 1], 0)) return res;
-        mergeToLeft(node, pos); //keyCounts left < t && right < t
+        assert(node->nodes[pos] != NULL && node->nodes[pos + 1] != NULL);
+        //we always have to free internal key
+        assert(needFree);
+
+        if(internalKeyDelete(node, pos, 0, FD_BY_RIGHT_SIDE)) return res;
+        if(internalKeyDelete(node, pos, 1, FD_BY_LEFT_SIDE)) return res;
+        
+        //keyCounts left < t && right < t:
+        mergeToLeft(node, pos);
+        res = deleteKey(node->nodes[pos], key, t-1, needFree);
+        if(res) node->subtreeKeyCount[pos]--;
+        return res;
     }
-//3
-    if(node->items[pos]->key != key){
-//key is not found yet and we don't need free it? FAIL
-        assert(needFree && node->nodes[pos]->keyCount >= MIN_KEY_COUNT);
-        if(node->nodes[pos]->keyCount == MIN_KEY_COUNT){
-            TreeNodeRef mc = node->nodes[pos], lc = node->nodes[pos - 1], rc = node->nodes[pos + 1];
-            int lkp = pos - 1, rkp = pos; /*  /'|'\  */
-            assert(lc != NULL || rc != NULL);
-            if(lc != NULL && lc->keyCount > MIN_KEY_COUNT){
-                addKey(mc, 0, node->items[lkp]);
-                node->items[lkp] = lc->items[lc->keyCount - 1];
-                addNode(mc, lc->nodes[lc->childCount - 1], 0);
-                excludeKey(lc, lc->keyCount - 1, 0);
-                excludeNode(lc, lc->childCount - 1, 0);
-            } else if(rc != NULL && rc->keyCount > MIN_KEY_COUNT){
-                addKey(mc, mc->keyCount - 1, node->items[rkp]);
-                node->items[rkp] = rc->items[0];
-                excludeKey(rc, 0, 0);
-                addNode(mc, rc->nodes[0], mc->childCount - 1);
-                excludeNode(rc, 0, 0);
-            } else{
-                if(lc != NULL) mergeToLeft(node, lkp);
-                else if(rc != NULL) mergeToLeft(node, rkp);
-                else assert(1);
-            }
-        }
-        return deleteKey(node->nodes[pos], key, getItemOrNext(node, key), 1);
-    }
+//3: pivot/merge
+    //key is not found yet and we don't need free it? FAIL. bad assert
+    //assert(needFree && node->nodes[pos]->keyCount >= MIN_KEY_COUNT);
+
+    pos = balanceNode(node, pos);
+
+    assert(pos < node->childCount);
+    res = deleteKey(node->nodes[pos], key, getItemOrNext(node->nodes[pos], key), needFree);
+    if(res) node->subtreeKeyCount[pos]--;
+    return res;
 
 } //deleteKey
 
-bool deleteKeyFromTree(TreeRef tree, LSQ_IntegerIndexT key){
+bool deleteKeyFromTree(TreePtr tree, LSQ_IntegerIndexT key){
     assert(tree != NULL && tree->root != NULL);
-    TreeNodeRef rt = tree->root;
+    TreeNodePtr rt = tree->root;
     if(!rt->keyCount) return false;
 
     int pos = getItemOrNext(rt, key);
-    if(1 == rt->keyCount){
-        assert(rt->items[0] != NULL == rt->items[1] != NULL); //well, yep, either root is also leaf, or not, nor none of that
-        
-        TreeNodeRef tmp = rt->nodes[0];
-        bool res = deleteKey(rt, key, pos, 1);
-        if(!rt->keyCount){
-            free(rt);
-            tree->root = tmp;
-        }
-        return res;
-        
-        /*if(rt->items[0] == NULL){
-            if(rt->items[0]->key != key) return 0;
-            excludeKey(rt, 0, 1);
-            free(rt);
-            tree->root = NULL;
-            return 1;
-        }
-        if(rt->items[0] < t && rt->items[1] < t){
-            tree->root = rt->items[0];
-            mergeToLeft(rt, 0);
-            free(rt);
-            pos = getItemOrNext(tree->root, key);
-            return deleteKey(tree->root, key, pos, 1);
-        }
-         */
+
+    if(rt->keyCount != 1 || isLeaf(rt)) return deleteKey(rt, key, pos, true);
+
+    assert(rt->nodes[0] != NULL && rt->nodes[1] != NULL);
+
+    TreeNodePtr tmp = rt->nodes[0];
+    bool res = deleteKey(rt, key, pos, true);
+    if(!rt->keyCount){
+        free(rt);
+        tree->root = tmp;
+        tmp->parent = NULL;
     }
-    return deleteKey(rt, key, pos, 1);
+    return res;
 }
 
-void destroySubTree(TreeNodeRef node){
+void destroySubTree(TreeNodePtr node){
     int i = 0;
     for(i = 0; i < node->keyCount; i++) if(node->items[i] != NULL) free(node->items[i]);
     for(i = 0; i < node->childCount; i++){
@@ -368,27 +619,345 @@ void destroySubTree(TreeNodeRef node){
     }
 }
 
-LSQ_HandleT LSQ_CreateSequence(void){
-    TreeRef tree = malloc(sizeof(Tree));
-    tree->first = tree->last = NULL;
+LSQ_HandleT LSQ_CreateSequence(){
+    TreePtr tree = malloc(sizeof(Tree));
     tree->size = 0;
-    tree->root = newTreeNodeRef(0, NULL);
+    tree->root = newTreeNode(0, NULL, true);
     return (LSQ_HandleT)tree;
 }
 
 void LSQ_DestroySequence(LSQ_HandleT handle){
     if(NULL == handle) return;
-    TreeRef tree = (TreeRef)handle;
+    TreePtr tree = handle;
     destroySubTree(tree->root);
     free(tree->root);
     free(tree);
 }
 
 LSQ_IntegerIndexT LSQ_GetSize(LSQ_HandleT handle){
-    return ((NULL == handle) ? 0 : ((TreeRef)handle)->size);
+    return ((NULL == handle) ? 0 : ((TreePtr)handle)->size);
 }
 
 int LSQ_IsIteratorDereferencable(LSQ_IteratorT iterator){
-    
+    TreeIteratorPtr it = iterator;
+    return
+        it != NULL && it->state == IT_NORMAL &&
+        (assert(it->node != NULL), it->pos < it->node->keyCount);
 }
+
+int LSQ_IsIteratorPastRear(LSQ_IteratorT iterator){
+    return iterator != NULL && ((TreeIteratorPtr)iterator)->state == IT_PAST_REAR;
+}
+
+int LSQ_IsIteratorBeforeFirst(LSQ_IteratorT iterator){
+    return iterator != NULL && ((TreeIteratorPtr)iterator)->state == IT_BEFORE_FIRST;
+}
+
+void LSQ_AdvanceOneElement(LSQ_IteratorT iterator){
+    LSQ_ShiftPosition(iterator, 1);
+}
+
+void LSQ_RewindOneElement(LSQ_IteratorT iterator){
+    LSQ_ShiftPosition(iterator, -1);
+}
+
+static inline void shiftForward(TreeIteratorPtr it, unsigned int shift){
+    TreeNodePtr node = it->node;
+    int pos = it->pos;
+    bool found = false;
+
+    while(!found){
+        if(!isLeaf(node)){
+            for(pos++; pos < node->childCount && !found; pos++){
+                if(shift <= node->subtreeKeyCount[pos]){
+                    found = true;
+                    node = node->nodes[pos];
+                    pos = -1;
+                }
+                if(found) break;//get outta for
+
+                shift -= node->subtreeKeyCount[pos];
+                shift--;//passing key
+                
+                if(!shift) found = pos < node->keyCount;
+                if(found) break;//get outta for
+
+            }
+            if(shift && found){
+                found = false;
+                continue;
+            }
+        } else{//if isLeaf
+            if(pos + shift <= node->keyCount){
+                pos += shift;
+                shift = 0;
+                found = pos < node->keyCount;
+            } else{
+                shift -= node->keyCount - pos;
+                pos = node->keyCount;
+                assert(!found);
+            }
+        }
+        if(!found){//climb up
+            if(isRoot(node)){
+                setIterator(it, NULL, 0, IT_PAST_REAR);
+                return;
+            }
+            assert(node->parent != NULL && node->parent->nodes != NULL);
+            while(node->parent->nodes[node->parent->childCount - 1] == node){
+
+                node = node->parent;
+                if(isRoot(node)){
+                    setIterator(it, NULL, 0, IT_PAST_REAR);
+                    return;
+                }
+                assert(node->parent != NULL && node->parent->nodes != NULL);
+            }
+            pos = getItemOrNext(node->parent, node->items[0]->key);
+            node = node->parent;
+            found = !shift;
+        }
+    }
+    setIterator(it, node, pos, IT_NORMAL);
+}
+
+static inline void shiftBackward(TreeIteratorPtr it, unsigned int shift){
+    TreeNodePtr node = it->node;
+    int pos = it->pos;
+    bool found = false;
+
+    while(!found){
+        if(isLeaf(node)){
+            if(shift <= pos){
+                pos -= shift;
+                shift = 0;
+                found = true;
+            } else{
+                shift -= pos;
+                pos = 0;
+            }
+        } else{
+            for(pos; pos >= 0 && !found; pos--){
+                if(shift <= node->subtreeKeyCount[pos]){
+                    found = true;
+                    node = node->nodes[pos];
+                    pos = node->keyCount;
+                }
+                if(found) break;//for
+
+                shift -= node->subtreeKeyCount[pos];
+                shift--;;
+                if(!shift) found = pos >= 0;
+            }
+            
+            if(shift && found){
+                found = false;
+                continue;
+            }
+        }
+        if(!found){
+            if(isRoot(node)){
+                setIterator(it, NULL, 0, IT_BEFORE_FIRST);
+                return;
+            }
+            assert(node->parent != NULL && node->parent->nodes != NULL);
+            while(node->parent->nodes[0] == node){
+
+                node = node->parent;
+                if(isRoot(node)){
+                    setIterator(it, NULL, 0, IT_BEFORE_FIRST);
+                    return;
+                }
+                assert(node->parent != NULL && node->parent->nodes != NULL);
+            }
+            
+            //now the node isn't first in parent's children. go lurk there
+            pos = getItemOrNext(node->parent, node->items[0]->key) - 1;
+            node = node->parent;
+            shift--;
+            found = !shift;
+        }
+    }
+    setIterator(it, node, pos, IT_NORMAL);
+}
+
+void LSQ_ShiftPosition(LSQ_IteratorT iterator, LSQ_IntegerIndexT shift){
+    if(NULL == iterator || !shift) return;
+    TreeIteratorPtr it = iterator;
+
+    if(it->state == IT_PAST_REAR && shift > 0 || it->state == IT_BEFORE_FIRST && shift < 0)
+        return;
+    if(it->state == IT_BEFORE_FIRST){
+        LSQ_SetPosition(it, 0);
+        shift--;
+    } else if(it->state == IT_PAST_REAR){
+        LSQ_SetPosition(it, it->tree->size - 1);
+        shift++;
+    }
+    
+    if(shift > 0) shiftForward(it, shift);
+    else shiftBackward(it, -shift);
+
+}
+
+void setIterator(TreeIteratorPtr it, TreeNodePtr node, int pos, TreeIteratorState state){
+    if(NULL == it) return;
+    it->node = node;
+    it->pos = pos;
+    it->state = state;
+}
+
+void LSQ_SetPosition(LSQ_IteratorT iterator, LSQ_IntegerIndexT pos){
+    TreeIteratorPtr it = iterator;
+    
+    if(pos < 0 || pos >= it->tree->size){
+        setIterator(it, NULL, 0, pos < 0 ? IT_BEFORE_FIRST : IT_PAST_REAR);
+        return;
+    }
+
+    TreeNodePtr root = it->tree->root;
+    setIterator(it, root, 0, IT_NORMAL);
+    LSQ_ShiftPosition(it, pos - (isLeaf(root) ? 0 : root->subtreeKeyCount[0]));
+}
+
+TreeIteratorPtr newTreeIterator(TreePtr tree, TreeNodePtr node, int pos, TreeIteratorState state){
+    TreeIteratorPtr it = malloc(sizeof(TreeIterator));
+    it->tree = tree;
+    setIterator(it, node, pos, state);
+    return it;
+}
+
+LSQ_IteratorT LSQ_GetElementByIndex(LSQ_HandleT handle, LSQ_IntegerIndexT index){
+    if(NULL == handle) return NULL;
+    TreePtr tree = handle;
+    KeyPosPtr keyPos = SearchKey(tree->root, index);
+    if(NULL == keyPos) return newTreeIterator(tree, NULL, 0, IT_BAD);
+
+    return newTreeIterator(tree, keyPos->node, keyPos->pos, IT_NORMAL);
+}
+
+LSQ_IteratorT LSQ_GetFrontElement(LSQ_HandleT handle){
+    TreeIteratorPtr it = malloc(sizeof(TreeIterator));
+    if(NULL == it) return NULL;
+    it->tree = handle;
+    LSQ_SetPosition(it, 0);
+    
+    return it;
+}
+
+LSQ_IteratorT LSQ_GetPastRearElement(LSQ_HandleT handle){
+    return newTreeIterator(handle, NULL, 0, IT_PAST_REAR);
+}
+
+void LSQ_DestroyIterator(LSQ_IteratorT iterator){
+    free(iterator);
+}
+
+LSQ_BaseTypeT* LSQ_DereferenceIterator(LSQ_IteratorT iterator){
+    if(!LSQ_IsIteratorDereferencable(iterator)) return NULL;
+    TreeIteratorPtr it = iterator;
+    return &it->node->items[it->pos]->data;
+}
+
+LSQ_IntegerIndexT LSQ_GetIteratorKey(LSQ_IteratorT iterator){
+    if(!LSQ_IsIteratorDereferencable(iterator)) return 0;
+    TreeIteratorPtr it = iterator;
+    return it->node->items[it->pos]->key;
+}
+
+void LSQ_InsertElement(LSQ_HandleT handle, LSQ_IntegerIndexT key, LSQ_BaseTypeT value){
+    TreeItemPtr item = malloc(sizeof(TreeItem));
+    if(NULL == item) return;
+
+    item->key = key;
+    item->data = value;
+    if(insertKeyInTree(handle, item))
+        ((TreePtr)handle)->size++;
+}
+
+void fallDownDelete(TreePtr tree, FallDownBehave fb){
+    TreeItemPtr item = fallDown(tree->root, fb);
+    if(NULL == item) return;
+    LSQ_DeleteElement(tree, item->key);
+}
+
+void LSQ_DeleteFrontElement(LSQ_HandleT handle){
+    fallDownDelete(handle, FD_BY_LEFT_SIDE);
+}
+
+void LSQ_DeleteRearElement(LSQ_HandleT handle){
+    fallDownDelete(handle, FD_BY_RIGHT_SIDE);
+}
+
+void LSQ_DeleteElement(LSQ_HandleT handle, LSQ_IntegerIndexT key){
+    if(deleteKeyFromTree(handle, key))
+        ((TreePtr)handle)->size--;
+}
+
+
+
+#ifdef LSQ_DEBUG
+#include <stdio.h>
+
+#endif
+void dumpNode(TreeNodePtr node){
+#ifdef LSQ_DEBUG
+#define LSQ_DUMP_KEYS
+    int i = 0;
+#ifndef LSQ_DUMP_KEYS
+    if(node->subtreeKeyCount != NULL) for(i = 0; i < node->childCount; i++)
+        print("%d\t", node->subtreeKeyCount[i]);
+    else printf("%d\t", node->keyCount);
+#else
+    for(i = 0; i < node->keyCount; i++)
+        printf("%d\t", node->items[i]->key);
+#endif
+    printf("|||\t");
+#endif
+}
+
+#define Q_SIZE 10000
+int Ql = 0, Qr = 0, Qsize = 0;
+TreeNodePtr Qu[Q_SIZE];
+
+inline static void push(TreeNodePtr node){
+    Qu[Qr++] = node;
+    Qr %= Q_SIZE;
+    Qsize++;
+}
+
+inline static TreeNodePtr pop(){
+    int pos = Ql++;
+    Ql %= Q_SIZE;
+    Qsize--;
+    return Qu[pos];
+}
+
+void dump(TreeNodePtr node){
+#ifdef LSQ_DEBUG
+
+    int i = 0, size = 0;
+    push(node);
+    printf("|||\t");
+    while(Ql != Qr){
+        node = pop();
+        dumpNode(node);
+        size += node->childCount;
+        for(i = 0; i < node->childCount; i++) push(node->nodes[i]);
+        if(Qsize == size){
+            size = 0;
+            printf("\n");
+            printf("|||\t");
+        }
+    }
+    printf("\n");
+    //getchar();
+    
+#endif
+}
+
+void LSQ_DumpSequence(LSQ_HandleT handle){
+    dump(((TreePtr)handle)->root);
+}
+
 
