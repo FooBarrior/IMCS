@@ -1,8 +1,2 @@
-sources = main.c linear_sequence_assoc.h tree.c test.c
-binary = tree
-$(binary): $(sources)
-	gcc -o $(binary) -g3 $(sources)
-clean:
-	rm $(binary)
-copy:
-	cp $(sources) Makefile /media/DATA/pile/projects/git/IMCS/
+b-tree.bin: linear_sequence_assoc.h LSQ_B_Tree.c main.c test.c
+gcc -g3 -o tree.bin linear_sequence_assoc.h LSQ_B_Tree.c main.c test.c
