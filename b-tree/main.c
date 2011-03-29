@@ -5,7 +5,7 @@
 #include <time.h>
 #include "linear_sequence_assoc.h"
 
-#define DODO 13
+#define DODO 113
 int a[DODO + 1];
 
 int main(){
@@ -21,7 +21,7 @@ int main(){
         LSQ_InsertElement(h, a[i], i);
         printf("size %d\n", LSQ_GetSize(h));
 
-        LSQ_DumpSequence(h);
+        //LSQ_DumpSequence(h);
     }
     for(
         it = LSQ_GetPastRearElement(h), LSQ_RewindOneElement(it);
@@ -30,6 +30,7 @@ int main(){
     ){
         printf("%d => %d\n", LSQ_GetIteratorKey(it), *LSQ_DereferenceIterator(it));
     }
+	LSQ_DestroyIterator(it);
 
     LSQ_DeleteElement(h, 123);
     for(i--; i >= 0; i--){
@@ -37,8 +38,9 @@ int main(){
         LSQ_DeleteFrontElement(h);
         printf("size %d\n", LSQ_GetSize(h));
 
-        LSQ_DumpSequence(h);
+        //LSQ_DumpSequence(h);
     }
+	LSQ_DestroySequence(h);
 
     return EXIT_SUCCESS;
 }

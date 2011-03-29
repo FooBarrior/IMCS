@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,7 +19,7 @@
 //that is, in turn, defining tree's upper and lower node bounds;
 //though it's naming differs from other constants,
 //this exception is included into the internal naming convention
-#define t 200
+#define t 96
 
 //B-tree nodes consists of:
 //at least 1 and at most (2 * t - 1) keys in root
@@ -46,7 +47,6 @@ typedef struct TreeNode{
     size_t keyCount, childCount;
     TreeItemPtr items[MAX_KEY_COUNT];
 
-    //parent could be useful for some good job
     struct TreeNode **nodes, *parent;
 
     //subtreeKeyCount is helpful to iterative operations
@@ -60,7 +60,6 @@ typedef struct TreeNode{
 typedef struct {
     LSQ_IntegerIndexT size;
     TreeNodePtr root;
-    size_t height;
 } Tree, *TreePtr;
 
 typedef enum {
@@ -96,10 +95,11 @@ typedef enum {
 static inline bool isTreeConditionFulfilled(TreeNodePtr node);
 static inline bool isTreeNodeChildCountValid(TreeNodePtr node);
 
-//structure-initializing functions
+//structure-[de]initializing functions
 static TreeNodePtr newTreeNode(size_t keyCount, TreeNodePtr parent, bool leaf);
 static KeyPosPtr newKeyPos(TreeNodePtr node, int pos);
 static TreeIteratorPtr newTreeIterator(TreePtr tree, TreeNodePtr node, int pos, TreeIteratorState state);
+static void freeNode(TreeNodePtr node);
 
 //key searching functions
 static TreeItemPtr fallDown(TreeNodePtr node, FallDownBehave how);
@@ -143,16 +143,6 @@ static inline void fallDownDelete(TreePtr tree, FallDownBehave fb);
 
 //initialize given iterator to given values
 static inline void setIterator(TreeIteratorPtr it, TreeNodePtr node, int pos, TreeIteratorState state);
-
-#ifdef LSQ_DEBUG
-#define INLINE_ON_RELEASE
-#else
-#define INLINE_ON_RELEASE inline
-#endif
-//tree debug info output
-static INLINE_ON_RELEASE void dumpNode(TreeNodePtr node);
-static INLINE_ON_RELEASE void dump(TreeNodePtr node);
-
 
 /******************************************************************************/
 
@@ -216,6 +206,14 @@ KeyPosPtr newKeyPos(TreeNodePtr node, int pos){
     res->node = node;
     res->pos = pos;
     return res;
+}
+
+static void freeNode(TreeNodePtr node){
+	if(!isLeaf(node)){
+		free(node->nodes);
+		free(node->subtreeKeyCount);
+	}
+	free(node);
 }
 
 TreeItemPtr fallDown(TreeNodePtr node, FallDownBehave how){
@@ -322,10 +320,10 @@ void excludeKey(TreeNodePtr node, int pos, bool needFree){
 
 void excludeNode(TreeNodePtr node, int pos, bool needFree){
     if(isLeaf(node)) return;
-    
+
 //    assert(isTreeNodeChildCountValid(node)); //why not?
     assert(node != NULL && pos >= 0 && pos < node->childCount && node->nodes != NULL);
-    if(needFree) free(node->nodes[pos]);
+    if(needFree) freeNode(node->nodes[pos]);
     memmove(
         node->nodes + pos,
         node->nodes + pos + 1,
@@ -336,7 +334,7 @@ void excludeNode(TreeNodePtr node, int pos, bool needFree){
         node->subtreeKeyCount + pos + 1,
         sizeof(size_t) * (node->childCount - pos - 1)
     );
-    
+
     node->childCount--;
     node->nodes[node->childCount] = NULL;
     node->subtreeKeyCount[node->childCount] = 0;
@@ -548,7 +546,7 @@ bool internalKeyDelete(TreeNodePtr node, int pos, int shift, FallDownBehave fb){
 
 bool deleteKey(TreeNodePtr node, LSQ_IntegerIndexT key, int pos, bool needFree){
 //ALWAYS, on successful (with true on return) call of this function, we need to
-//decrease .subtreeKeyCount; how to do it pretty? Suppose, i'll wrap it in *TODO*, or just leave;
+//decrease .subtreeKeyCount; 
     bool res = true;
     if(NULL == node) return false;
 
@@ -611,11 +609,11 @@ bool deleteKeyFromTree(TreePtr tree, LSQ_IntegerIndexT key){
 
 void destroySubTree(TreeNodePtr node){
     int i = 0;
-    for(i = 0; i < node->keyCount; i++) if(node->items[i] != NULL) free(node->items[i]);
+    for(i = 0; i < node->keyCount; i++) free(node->items[i]);
     for(i = 0; i < node->childCount; i++){
         if(NULL == node->nodes[i]) continue;
         destroySubTree(node->nodes[i]);
-        free(node->nodes[i]);
+        freeNode(node->nodes[i]);
     }
 }
 
@@ -630,7 +628,7 @@ void LSQ_DestroySequence(LSQ_HandleT handle){
     if(NULL == handle) return;
     TreePtr tree = handle;
     destroySubTree(tree->root);
-    free(tree->root);
+    freeNode(tree->root);
     free(tree);
 }
 
@@ -746,7 +744,7 @@ static inline void shiftBackward(TreeIteratorPtr it, unsigned int shift){
                 if(found) break;//for
 
                 shift -= node->subtreeKeyCount[pos];
-                shift--;;
+                shift--;
                 if(!shift) found = pos >= 0;
             }
             
@@ -833,7 +831,9 @@ LSQ_IteratorT LSQ_GetElementByIndex(LSQ_HandleT handle, LSQ_IntegerIndexT index)
     KeyPosPtr keyPos = SearchKey(tree->root, index);
     if(NULL == keyPos) return newTreeIterator(tree, NULL, 0, IT_BAD);
 
-    return newTreeIterator(tree, keyPos->node, keyPos->pos, IT_NORMAL);
+    TreeIteratorPtr it = newTreeIterator(tree, keyPos->node, keyPos->pos, IT_NORMAL);
+	free(keyPos);
+	return it;
 }
 
 LSQ_IteratorT LSQ_GetFrontElement(LSQ_HandleT handle){
@@ -873,6 +873,8 @@ void LSQ_InsertElement(LSQ_HandleT handle, LSQ_IntegerIndexT key, LSQ_BaseTypeT 
     item->data = value;
     if(insertKeyInTree(handle, item))
         ((TreePtr)handle)->size++;
+	else
+		free(item);
 }
 
 void fallDownDelete(TreePtr tree, FallDownBehave fb){
@@ -894,70 +896,5 @@ void LSQ_DeleteElement(LSQ_HandleT handle, LSQ_IntegerIndexT key){
         ((TreePtr)handle)->size--;
 }
 
-
-
-#ifdef LSQ_DEBUG
-#include <stdio.h>
-
-#endif
-void dumpNode(TreeNodePtr node){
-#ifdef LSQ_DEBUG
-#define LSQ_DUMP_KEYS
-    int i = 0;
-#ifndef LSQ_DUMP_KEYS
-    if(node->subtreeKeyCount != NULL) for(i = 0; i < node->childCount; i++)
-        print("%d\t", node->subtreeKeyCount[i]);
-    else printf("%d\t", node->keyCount);
-#else
-    for(i = 0; i < node->keyCount; i++)
-        printf("%d\t", node->items[i]->key);
-#endif
-    printf("|||\t");
-#endif
-}
-
-#define Q_SIZE 10000
-int Ql = 0, Qr = 0, Qsize = 0;
-TreeNodePtr Qu[Q_SIZE];
-
-inline static void push(TreeNodePtr node){
-    Qu[Qr++] = node;
-    Qr %= Q_SIZE;
-    Qsize++;
-}
-
-inline static TreeNodePtr pop(){
-    int pos = Ql++;
-    Ql %= Q_SIZE;
-    Qsize--;
-    return Qu[pos];
-}
-
-void dump(TreeNodePtr node){
-#ifdef LSQ_DEBUG
-
-    int i = 0, size = 0;
-    push(node);
-    printf("|||\t");
-    while(Ql != Qr){
-        node = pop();
-        dumpNode(node);
-        size += node->childCount;
-        for(i = 0; i < node->childCount; i++) push(node->nodes[i]);
-        if(Qsize == size){
-            size = 0;
-            printf("\n");
-            printf("|||\t");
-        }
-    }
-    printf("\n");
-    //getchar();
-    
-#endif
-}
-
-void LSQ_DumpSequence(LSQ_HandleT handle){
-    dump(((TreePtr)handle)->root);
-}
 
 
