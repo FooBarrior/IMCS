@@ -1,10 +1,13 @@
-complex/simple/: main.cpp
-	g++ -ocomplex.bin -g *.cpp
+binary = complex.bin
+commit_path = /media/DATA/pile/projects/git/IMCS/cpp/complex/simple
+
+$(binary): main.cpp
+	g++ -o$(binary) -g *.cpp
 clean:
-	rm complex.bin
+	rm $(binary)
 commit:
-	mkdir -p /media/DATA/pile/projects/git/IMCS/cpp/complex/simple/
-	cp *.cpp /media/DATA/pile/projects/git/IMCS/cpp/complex/simple/
-	cp *.h /media/DATA/pile/projects/git/IMCS/cpp/complex/simple/
-	cp Makefile /media/DATA/pile/projects/git/IMCS/cpp/complex/simple/
+	mkdir -p $(commit_path)
+	cp *.cpp $(commit_path)
+	cp *.h $(commit_path)
+	cp Makefile $(commit_path)
 
