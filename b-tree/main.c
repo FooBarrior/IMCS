@@ -5,11 +5,10 @@
 #include <time.h>
 #include "linear_sequence_assoc.h"
 
-#define DODO 113
+#define DODO 13
 int a[DODO + 1];
 
 int main(){
-	printf("RAAAAAWRRRR\n");
     LSQ_HandleT h = LSQ_CreateSequence();
     LSQ_IteratorT it = NULL;
     int i = 0;
@@ -31,7 +30,6 @@ int main(){
     ){
         printf("%d => %d\n", LSQ_GetIteratorKey(it), *LSQ_DereferenceIterator(it));
     }
-	LSQ_DestroyIterator(it);
 
     LSQ_DeleteElement(h, 123);
     for(i--; i >= 0; i--){
@@ -41,7 +39,6 @@ int main(){
 
         //LSQ_DumpSequence(h);
     }
-	LSQ_DestroySequence(h);
 
     return EXIT_SUCCESS;
 }

@@ -263,7 +263,6 @@ int start_test()
 		LSQ_SetPosition(iter, 0);
 		LSQ_DeleteElement(seq, LSQ_GetIteratorKey(iter));
 		test_assert_seq(seq, 5, 1, 3, 4, 7, 9);
-		return 0;
 
 		LSQ_SetPosition(iter, 4);
 		LSQ_DeleteFrontElement(seq);

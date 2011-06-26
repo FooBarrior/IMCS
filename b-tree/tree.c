@@ -1,11 +1,10 @@
-#include <stdio.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include "linear_sequence_assoc.h"
 
 
-//MSVC port
+//a try to port to systems without stdbool and inline declarations from c99
 #if __STDC_VERSION__ >= 199901L || __GNUC__ >= 3
 #include <stdbool.h>
 #else
@@ -127,8 +126,10 @@ static void addNode(TreeNodePtr node, TreeNodePtr newNode, int subtreeKeyCount, 
 static void excludeKey(TreeNodePtr node, int pos, bool needFree);
 static void excludeNode(TreeNodePtr node, int pos, bool needFree);
 
-//main key insertion algorithm block
+//used by insertion and deletion functions
 static void pourElements(TreeNodePtr a, TreeNodePtr b, int start);
+
+//main key insertion algorithm block
 static bool splitChild(TreeNodePtr node, int x);
 static bool insertKey(TreeNodePtr node, TreeItemPtr key);
 static bool insertKeyInTree(TreePtr tree, TreeItemPtr item);
@@ -143,6 +144,13 @@ static inline void fallDownDelete(TreePtr tree, FallDownBehave fb);
 
 //initialize given iterator to given values
 static inline void setIterator(TreeIteratorPtr it, TreeNodePtr node, int pos, TreeIteratorState state);
+
+//recursive fall for destroing subtree
+void destroySubTree(TreeNodePtr node);
+
+//iterator shifting functions
+static inline void shiftForward(TreeIteratorPtr it, unsigned int shift);
+static inline void shiftBackward(TreeIteratorPtr it, unsigned int shift);
 
 /******************************************************************************/
 
@@ -168,8 +176,8 @@ TreeNodePtr newTreeNode(size_t keyCount, TreeNodePtr parent, bool leaf){
     int i = 0;
     TreeNodePtr res = malloc(sizeof(TreeNode));
     if(NULL == res) return NULL;
-    size_t childCount = 0;
 
+    size_t childCount = 0;
     if(!leaf){
         childCount = keyCount + 1;
         res->nodes = malloc(sizeof(TreeNodePtr) * MAX_CHILD_COUNT);
@@ -659,7 +667,7 @@ void LSQ_RewindOneElement(LSQ_IteratorT iterator){
     LSQ_ShiftPosition(iterator, -1);
 }
 
-static inline void shiftForward(TreeIteratorPtr it, unsigned int shift){
+void shiftForward(TreeIteratorPtr it, unsigned int shift){
     TreeNodePtr node = it->node;
     int pos = it->pos;
     bool found = false;
@@ -719,7 +727,7 @@ static inline void shiftForward(TreeIteratorPtr it, unsigned int shift){
     setIterator(it, node, pos, IT_NORMAL);
 }
 
-static inline void shiftBackward(TreeIteratorPtr it, unsigned int shift){
+void shiftBackward(TreeIteratorPtr it, unsigned int shift){
     TreeNodePtr node = it->node;
     int pos = it->pos;
     bool found = false;
