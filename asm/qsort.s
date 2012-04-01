@@ -14,22 +14,23 @@ c_qsd:
 min_fmt:
     .string "MIN: %llu\n"
 .equ INT_SIZE, 8
-.equ ARR_SIZE, 10
+.equ ARR_SIZE, 10000
 .equ MARS_A, 1 #Marsagilla 64-bit xorshift
 .equ MARS_B, 1
 .equ MARS_C, 55
 
 array_size:
     .int ARR_SIZE*INT_SIZE
-array:
-    .space ARR_SIZE * INT_SIZE
-array_end:
-
 fast_itoa_buf:
     .space 21
 fast_itoa_buf_end:
 newline:
     .string "\n"
+
+.bss
+array:
+    .space ARR_SIZE * INT_SIZE
+array_end:
 
 .globl _start
 
