@@ -31,9 +31,7 @@ fast_itoa_buf_end:
 newline:
     .string "\n"
 
-.globl main
-.type main, @function 
-.type qsort, @function
+.globl _start
 
 .text
 qsort:
@@ -121,7 +119,7 @@ fast_itoa_loop:
 
 
 #ENTRY POINT
-main:
+_start:
 #16-byte frame alignment
     pushq %rbp
 
@@ -135,7 +133,8 @@ main:
 
 #for-loop
     movl $ARR_SIZE, %ebx
-    movq $-1, %r14
+    xorq %r14, %r14
+    negq %r14
     movq $fast_itoa_buf_end, %r15 #optimize for very_fast_itoa call
 loop:
 #inline random
@@ -199,5 +198,6 @@ out_1:
 out_2:
 
     popq %rbp
-    mov $0, %eax
-    ret
+    movl $60, %eax
+    xorl %edi, %edi
+    syscall
