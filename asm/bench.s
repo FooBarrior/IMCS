@@ -1,6 +1,6 @@
 .globl main
 .type main, @function
-.equ N, 100000000
+.equ N, 10000000
 
 .data
 fmt_int: .string "%s\t# %llu\n"
@@ -158,13 +158,45 @@ empty_chk_loop:
     movq %rbx, %rax 
     ENDTESTP
 
-    TST "DIV"
+    TST "DIV long"
     xorq %rdx, %rdx
     movq $2135461, %rax
     movq $123, %rsi
+    divl %esi
+    ENDTESTP
+
+    TST "DIV quad big on small"
+    xorq %rdx, %rdx
+    movq $0x213456789ACBD, %rax
+    movq $3, %rsi
     divq %rsi
     ENDTESTP
 
+    TST "DIV quad big on big"
+    xorq %rdx, %rdx
+    movq $0x213456789ACBD, %rax
+    movq $34512321213, %rsi
+    divq %rsi
+    ENDTESTP
+
+    TST "DIV quad big on big with rdx"
+    movq $0x54BAD234BEEFDEAD, %rdx
+    movq $0x213456789ACBDEDD, %rax
+    movq $0xCCC23ABBADDA3111, %rsi
+    divq %rsi
+    ENDTESTP
+
+    TST "MUL"
+    movq $0xA567D389A567D389, %rax
+    movq $0x7523D45544554455, %rsi
+    mulq %rsi
+    ENDTESTP
+
+    TST "MUL byte"
+    movb $0xA5, %al
+    movb $0xDE, %ah
+    mulb %ah
+    ENDTESTP
     popq %rax
     popq %rax
     popq %rbp
