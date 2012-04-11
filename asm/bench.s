@@ -69,7 +69,7 @@ fmt_int: .string "%s\t# %llu\n"
     ENDTEST\p
 .endm
 
-.equ EMPTY_CHK_CNT, 1
+.equ EMPTY_CHK_CNT, 10
 main:
     pushq %rbp
     _SYNC_
